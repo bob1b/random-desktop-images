@@ -22,7 +22,6 @@ if hasattr(sys, 'setdefaultencoding'):
     sys.setdefaultencoding('utf8')
 
 
-
 #image_directory = "/home/b/Desktop/sort"
 image_directory = "/home/b/Pictures"
 image_info_file = "/home/b/.rand_bg_data.json"
@@ -54,6 +53,7 @@ def add_image_md5s(images):
     for image in images:
         image['md5'] = hashlib.md5(image["path"]).hexdigest()
 
+
 def check_for_duplicate_images(images):
     # TODO - this is likely to be very inefficient, but is only run at startup
     md5s = sorted( [i['md5'] for i in images] )
@@ -68,7 +68,9 @@ def check_for_duplicate_images(images):
 
 # TODO- this fails for empty dir, I think?
 def get_min_num_views(images):
-    return min( [i['views'] for i in images] )
+    views = [i['views'] for i in images]
+    val = min(views)
+    return val
 
 
 def seed_random():
@@ -132,6 +134,7 @@ def image_info_by_md5(images, md5, allow_multiple=False):
 
 
 # TODO - perhaps rename
+# TODO - probably break into sub functions
 def compare_current_images_to_had_images(images, had_images):
     if not had_images:
         return images
@@ -139,7 +142,21 @@ def compare_current_images_to_had_images(images, had_images):
     md5s_current = [i['md5'] for i in images]
     md5s_before  = [i['md5'] for i in had_images]
 
-    min_num_views = get_min_num_views(images)
+    for idx, image in enumerate(images):
+        # compare paths for same filenames (same md5, different path)
+        # existing file, but check for name changes
+        if image['md5'] in md5s_before:
+            before_image_info = image_info_by_md5(had_images, image['md5'])
+            if image['path'] != before_image_info['path']:
+                print("Image changed names0 - md5: %s" % image['md5'])
+                print("\t%s -> %s" % (before_image_info['path'], image['path']))
+
+            # take view count from info file and save in the current image info array
+            if before_image_info['views'] is not None:
+                images[idx]["views"] = before_image_info['views']
+
+    min_num_views = get_min_num_views(had_images)
+    print("min_num_views = %d" % min_num_views)
 
     for image in images:
         # new images? (in current_images but not in had_images)
@@ -150,16 +167,8 @@ def compare_current_images_to_had_images(images, had_images):
                 image["views"] = 0
             else:
                 image["views"] = min_num_views - 1
+            print("\tset initial view count to %d" % image["views"])
 
-        # compare paths for same filenames (same md5, different path)
-        else: # existing file, but check for name changes
-            before_image_info = image_info_by_md5(had_images, image['md5'])
-            if image['path'] != before_image_info['path']:
-                print("Image changed names0 - md5: %s" % image['md5'])
-                print("%s -> %s" % (before_image_info['path'], image['path']))
-
-            # grab view count
-            image["views"] = before_image_info['views']
 
     for had_image in had_images:
         # deleted images? (in had_images but not in images)
@@ -224,11 +233,10 @@ how_much, time_units = seconds_to_realistic_time(num_images*sleep_seconds)
 print("It will take %0.2f %s to view all images" % (how_much, time_units))
 
 while (1):
-    min_num_views = get_min_num_views(images)
-    print ("min_num_views = %d" % min_num_views)
 
     loop_count = 0
     rand_image_num = 0
+    min_num_views = get_min_num_views(images)
 
     # TODO - might want to find a better way to do this later
     while (1):
@@ -245,11 +253,10 @@ while (1):
             rand_image_num = first_image_with_view_count(images, min_num_views)
             if rand_image_num >= 0:
                 print("going with image number %d" % rand_image_num)
-                break
             else:
                 print("didn't find an image that has only been viewed %d times" % min_num_views)
                 rand_image_num = 0
-                break
+            break
 
     images[rand_image_num]['views'] = images[rand_image_num]['views'] + 1
     print("Using image #%s '%s'   %d" %  (rand_image_num, images[rand_image_num]['path'], images[rand_image_num]['views']))
