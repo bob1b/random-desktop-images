@@ -65,6 +65,8 @@ def check_for_duplicate_images(images):
                 print("\tdup md5: %s\t%s" % (image['md5'], image['path']))
         prev_md5 = md5
 
+# TODO - check for lookalike images
+
 
 # TODO- this fails for empty dir, I think?
 def get_min_num_views(images):
@@ -77,7 +79,21 @@ def seed_random():
     random.seed(int(time.time() * random.randint(0,100) * 10))
 
 
+def random_image_with_view_count(images, view_count):
+    print("random_image_with_view_count(): view_count = %d" % view_count)
+    md5_subset = [ i['md5'] for i in images if i['views'] <= view_count ]
+
+    if len(md5_subset) == 0:
+        return None
+    subset_image_num = random.randint(0, len(md5_subset) - 1)
+
+    return image_num_by_md5(images, md5_subset[subset_image_num])
+
+
+# TODO - test this function
 def first_image_with_view_count(images, views):
+    ''' This is a fallback function to find an image with a given view count
+        after there were too many random searches '''
     try:
         image_views = [ i['views'] for i in images ]
         return image_views.index(min_num_views) # try to find first with correct view count
@@ -132,6 +148,12 @@ def image_info_by_md5(images, md5, allow_multiple=False):
     return None
 
 
+def image_num_by_md5(images, md5):
+    for idx, image in enumerate(images):
+        if image['md5'] == md5:
+            return idx
+    return None
+
 
 # TODO - perhaps rename
 # TODO - probably break into sub functions
@@ -169,7 +191,6 @@ def compare_current_images_to_had_images(images, had_images):
                 image["views"] = min_num_views - 1
             print("\tset initial view count to %d" % image["views"])
 
-
     for had_image in had_images:
         # deleted images? (in had_images but not in images)
         if had_image['md5'] not in md5s_current:
@@ -205,6 +226,7 @@ def set_background_image(path):
     command = 'gsettings set org.gnome.desktop.background picture-uri "file://%s"' % images[rand_image_num]['path']
     p = os.popen(command)
 
+
 ###############################################################
 # main
 
@@ -239,24 +261,14 @@ while (1):
     min_num_views = get_min_num_views(images)
 
     # TODO - might want to find a better way to do this later
-    while (1):
-        loop_count = loop_count + 1
-        if (loop_count <= num_images*10):
-            rand_image_num = random.randint(0, num_images - 1) # a <= X <= b
-            if (images[rand_image_num]['views'] > min_num_views):
-                print ("image #%d already has %d views" % (rand_image_num, images[rand_image_num]['views']))
-                next
-            else:
-                break
-        else: # too many searches, just pick an image
-            print("too many searches for view count = %d" % min_num_views)
-            rand_image_num = first_image_with_view_count(images, min_num_views)
-            if rand_image_num >= 0:
-                print("going with image number %d" % rand_image_num)
-            else:
-                print("didn't find an image that has only been viewed %d times" % min_num_views)
-                rand_image_num = 0
-            break
+    rand_image_num = random_image_with_view_count(images, min_num_views)
+    if rand_image_num is None:
+        rand_image_num = first_image_with_view_count(images, min_num_views)
+        if rand_image_num >= 0:
+            print("going with image number %d" % rand_image_num)
+        else:
+            print("didn't find an image that has only been viewed %d times" % min_num_views)
+            rand_image_num = 0
 
     images[rand_image_num]['views'] = images[rand_image_num]['views'] + 1
     print("Using image #%s '%s'   %d" %  (rand_image_num, images[rand_image_num]['path'], images[rand_image_num]['views']))
