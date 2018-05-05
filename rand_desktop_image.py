@@ -1,11 +1,5 @@
-import os
-import sys
-import time
-import json
-import random
-import collections
-import hashlib
-import time
+import os, copy, sys, time, json, random, collections, hashlib, time
+import math
 import actmon
 import pprint
 import importlib
@@ -25,7 +19,8 @@ if hasattr(sys, 'setdefaultencoding'):
 #image_directory = "/home/b/Desktop/sort"
 image_directory = "/home/b/Pictures"
 image_info_file = "/home/b/.rand_bg_data.json"
-sleep_seconds = 2 * 60
+last_viewed_images_file = '/home/b/.rand_bg_last_viewed.html'
+sleep_seconds = 60 # 2 * 60
 wait_for_not_idle = True
 
 #############################################
@@ -41,7 +36,7 @@ def get_file_list(directory):
     for f in dir_list:
         file_path = join(directory, f)
         if isfile(file_path):
-            image_list.append( {"path":file_path, "views":0 } )
+            image_list.append( {"path":file_path } )
         else:
             print("%s is not a file, ignoring" % file_path)
 
@@ -52,6 +47,13 @@ def get_file_list(directory):
 def add_image_md5s(images):
     for image in images:
         image['md5'] = hashlib.md5(image["path"]).hexdigest()
+
+
+def add_last_seen(images):
+    for image in images:
+        if 'last_seen' not in image:
+            image['last_seen'] = 0
+    return images
 
 
 def check_for_duplicate_images(images):
@@ -110,18 +112,34 @@ def load_info_file(image_info_file):
                 obj = json.load(json_file)
             except ValueError:
                 print("Unable to parse json data from file");
-    else: # file does not exit
+    else: # file does not exist
         # TODO
         print("info file does not exist: %s" % image_info_file)
 
     return obj
 
 
+def create_last_viewed_images_file(filename):
+    last_viewed_images = copy.deepcopy(images)
+    last_viewed_images.sort(key=lambda x:x['last_seen'], reverse=True)
+    l = last_viewed_images[:100]
+
+    try:
+#       print("creating last_viewed html file: %s" % filename)
+        with open(filename, 'w') as last_viewed_file:
+            last_viewed_file.write("<html><body>")
+            for i in l:
+                if int(i['last_seen']) > 0:
+                    last_viewed_file.write("<img src='{}' height='100'/>".format(i['path']))
+            last_viewed_file.write("</body></html>")
+    except IOError:
+        print("Unable to write last_viewed_images_file: %s" % filename)
+
+
 def write_info_file(image_info_file, images):
 #   print("writing info file: %s", image_info_file)
     try:
         with open(image_info_file, 'w') as json_file:
-#           json.dump(images, json_file)
             json_file.write(json.dumps(images, indent=2, sort_keys=True))
     except IOError:
         print("Unable to write info file: %s" % image_info_file)
@@ -173,9 +191,15 @@ def compare_current_images_to_had_images(images, had_images):
                 print("Image changed names0 - md5: %s" % image['md5'])
                 print("\t%s -> %s" % (before_image_info['path'], image['path']))
 
+
+            # TODO - abstract views and last_seen, pull from info_file
             # take view count from info file and save in the current image info array
-            if before_image_info['views'] is not None:
+            if 'views' in before_image_info:
                 images[idx]["views"] = before_image_info['views']
+
+            # take last_seen from info file and save in the current image info array
+            if 'last_seen' in before_image_info:
+                images[idx]["last_seen"] = before_image_info['last_seen']
 
     min_num_views = get_min_num_views(had_images)
     print("min_num_views = %d" % min_num_views)
@@ -202,29 +226,45 @@ def compare_current_images_to_had_images(images, had_images):
 
 def seconds_to_realistic_time(seconds):
     if seconds <= 60:
-        return seconds, "seconds"
+        return (seconds, "seconds")
 
     minutes = seconds / 60.0
     if minutes < 60:
-        return minutes, "minutes"
+        return ("%.2f" % minutes, 'minutes')
 
     hours = minutes / 60.0
     if hours < 24:
-        return hours, "hours"
+        return ("%.2f" % hours, 'hours')
 
     days = hours / 24.0
     if days < 7:
-        return days, "days"
+        return ("%.2f" % days, 'days')
 
     weeks = days / 7.0
-    return weeks, "weeks"
-
-    return how_much, time_units
+    return ("%.2f" % weeks, 'weeks')
 
 
 def set_background_image(path):
     command = 'gsettings set org.gnome.desktop.background picture-uri "file://%s"' % images[rand_image_num]['path']
     p = os.popen(command)
+
+
+def get_random_least_recently_viewed_image(images, min_num_views):
+    now = int(time.time())
+
+    least_viewed_images = [i for i in images if i['views'] <= min_num_views]
+    print("num images with view_count <= %d: %d" % (min_num_views, len(least_viewed_images)))
+    if len(least_viewed_images) == 0:
+        least_viewed_images = [i for i in images if i['views'] <= min_num_views + 1]
+
+    least_viewed_images.sort(key=lambda x:x['last_seen'])
+    ten_perc = int(math.ceil(len(least_viewed_images) * 0.10))
+    print("ten perc of {} elements is {}".format(len(least_viewed_images), ten_perc))
+    if ten_perc < 30:
+        ten_perc = min(30, len(least_viewed_images))
+
+    image_num = random.randint(0, ten_perc-1)
+    return least_viewed_images[image_num]['md5']
 
 
 ###############################################################
@@ -239,6 +279,7 @@ had_images = load_info_file(image_info_file)
 
 
 images = compare_current_images_to_had_images(images, had_images)
+images = add_last_seen(images)
 
 check_for_duplicate_images(images)
 
@@ -252,7 +293,7 @@ print("num_images = %d" % num_images)
 how_much, time_units = seconds_to_realistic_time(num_images*sleep_seconds)
 
 
-print("It will take %0.2f %s to view all images" % (how_much, time_units))
+print("It will take %s %s to view all images" % (how_much, time_units))
 
 while (1):
 
@@ -260,21 +301,19 @@ while (1):
     rand_image_num = 0
     min_num_views = get_min_num_views(images)
 
-    # TODO - might want to find a better way to do this later
-    rand_image_num = random_image_with_view_count(images, min_num_views)
-    if rand_image_num is None:
-        rand_image_num = first_image_with_view_count(images, min_num_views)
-        if rand_image_num >= 0:
-            print("going with image number %d" % rand_image_num)
-        else:
-            print("didn't find an image that has only been viewed %d times" % min_num_views)
-            rand_image_num = 0
+    rand_md5 = get_random_least_recently_viewed_image(images, min_num_views)
+    rand_image_num = image_num_by_md5(images, rand_md5)
 
     images[rand_image_num]['views'] = images[rand_image_num]['views'] + 1
-    print("Using image #%s '%s'   %d" %  (rand_image_num, images[rand_image_num]['path'], images[rand_image_num]['views']))
+    seconds_since_last_seen = int(time.time()) - images[rand_image_num]['last_seen']
+    print("Using image #%s '%s'" % (rand_image_num, images[rand_image_num]['path']))
+    print("now at num_views =  %d" % images[rand_image_num]['views'])
+    print("last seen %s (%d seconds) ago\n" % (seconds_to_realistic_time(seconds_since_last_seen), seconds_since_last_seen))
+    images[rand_image_num]['last_seen'] = int(time.time())
 
     set_background_image(images[rand_image_num]['path'])
     write_info_file(image_info_file, images)
+    create_last_viewed_images_file(last_viewed_images_file)
 
     epoch_time = int(time.time())
     notified = False
@@ -294,6 +333,9 @@ while (1):
                     notified = True
 #                   print("ready to change pic, sleeping: %f < %f" % (idle_ms, (.5 * sleep_seconds * 1000)))
             else:
+                if notified:
+                    print("Got it. Waiting 2 seconds")
+                time.sleep(2)
                 notified = False
                 break
         else:
