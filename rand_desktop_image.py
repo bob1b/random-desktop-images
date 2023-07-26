@@ -10,6 +10,7 @@ import math
 import getopt
 import pprint
 import importlib
+from signal import signal, SIGINT
 from datetime import datetime
 from os import listdir
 from os.path import isfile, join
@@ -30,12 +31,21 @@ import gajim_common_idle as idle
 if sys.version_info.major < 3:
     sys.exit("This is not Python 3")
 
+thumbnail_size = 512, 512
+sleep_seconds = 20
+after_idle_wait_seconds = 2
+percentage = 50 # randomly choose from this percentage of the least recently viewed images
+wait_for_not_idle = True
+span_multiple_images = 1
+polling = 0
+write_info_only = 0
+do_ascii_image = 0
+num_key_releases = 0
 
 # TODO - clean up code
 # TODO - config file (yaml?)
 # TODO - delete file from polling prompt
 # TODO - change to polling mode without exiting
-# TODO - go back to previous pic (affects history?)
 # TODO - go to specific pic (by number or path or filename? wildcard or typeahead?)
 # TODO - list files - filter by props, eg. landscape or above a certain size
 # TODO - change all config during runtime
@@ -205,33 +215,33 @@ if hasattr(sys, 'setdefaultencoding'):
 check_images = True
 check_images_after_first_pic_change = True
 
-#base = "C:/Users/b/Desktop/rand_bg_image/"
-#image_directory = "C:/Users/b/Desktop/other/pictures"
-#image_info_file =         base + "rand_bg_data.json"
-#last_viewed_images_file = base + "rand_bg_last_viewed.html"
-#temp_image_file =         base + "rand_bg_temp_image.png"
-#thumbnail_directory =     base + "thumbnails/"
+if 1:
+    # windows
+    #base = "C:/Users/b/Desktop/rand_bg_image/"
+    #image_directory = "C:/Users/b/Desktop/other/pictures"
+    #image_info_file =         base + "rand_bg_data.json"
+    #last_viewed_images_file = base + "rand_bg_last_viewed.html"
+    #temp_image_file =         base + "rand_bg_temp_image.png"
+    #thumbnail_directory =     base + "thumbnails/"
 
-image_directory = "/home/b/Pictures"
-image_info_file = "/home/b/.rand_bg_data.json"
-last_viewed_images_file = "/home/b/.rand_bg_last_viewed.html"
-temp_image_file = "/home/b/.rand_bg_temp_image.png"
-thumbnail_directory = "/home/b/.rand_bg_thumbs"
+    # linux
+    image_directory = "/home/b/Pictures"
+    image_info_file = "/home/b/.rand_bg_data.json"
+    last_viewed_images_file = "/home/b/.rand_bg_last_viewed.html"
+    temp_image_file = "/home/b/.rand_bg_temp_image.png"
+    temp_image_file = "/home/b/.rand_bg_temp_image.png"
+    thumbnail_directory = "/home/b/.rand_bg_thumbs"
 
-thumbnail_size = 512, 512
-sleep_seconds = 15
-after_idle_wait_seconds = 2
-percentage = 50 # randomly choose from this percentage of the least recently viewed images
-wait_for_not_idle = True
-span_multiple_images = 1
-polling = 0
-write_info_only = 0
-
-do_ascii_image = 0
 
 num_key_releases = 0
 listener = Listener(on_press=on_press, on_release=on_release)
 listener.start()
+
+#############################################
+def handler(signal_received, frame):
+    write_info_file(image_info_file, images)
+    print('SIGINT or CTRL-C detected')
+    exit(0)
 
 
 #############################################
@@ -587,7 +597,7 @@ def compare_current_images_to_had_images(images, had_images):
     for idx, had_image in enumerate(had_images):
         # deleted images? (in had_images but not in images)
         if had_image['md5'] not in md5s_current_dict:
-            warning("file deleted: %s, md5: %s" % (had_image['path'], had_image['md5']))
+            warning("file moved/deleted: %s, md5: %s" % (had_image['path'], had_image['md5']))
 
     # ensure images has correct info on what files exist now (mainly get view count)
     return images
@@ -638,6 +648,13 @@ def set_background_image(image):
         set_background_image_linux(image)
 
 #############################################
+def hide_background_image():
+    if is_windows():
+        hide_background_image_windows()
+    else: # assume linux
+        hide_background_image_linux()
+
+#############################################
 def set_background_image_windows(image):
     path = image
     if isinstance(image, dict):
@@ -658,20 +675,39 @@ def set_background_image_linux(image):
     # TODO - list
 
     # get scaling method
-    command = 'gsettings get org.gnome.desktop.background picture-options'
+    command = '/usr/bin/gsettings get org.gnome.desktop.background picture-options'
     p = os.popen(command)
     scaling = p.read().split('\n')[0] # TODO - might be a better way to do this
 
-    command = 'gsettings set org.gnome.desktop.background picture-uri "file://%s"' % path
+    # set background command changes based on desktop 
+    desktop = os.getenv("XDG_CURRENT_DESKTOP")
+    if desktop == "Cinnamon" or desktop == "X-Cinnamon":
+        command = '/usr/bin/gsettings set org.cinnamon.desktop.background picture-uri "file://%s"' % path
+#       command = '/usr/bin/gsettings set org.cinnamon.desktop.background picture-uri "%s"' % path
+    elif desktop == "MATE":
+        command = '/usr/bin/gsettings set org.mate.background picture-filename "file://%s"' % path
+#       command = '/usr/bin/gsettings set org.mate.background picture-filename "%s"' % path
+    elif desktop == "XFCE":
+        command = 'xfce4-set-wallpaper "%s"' % path
+        command = 'xfce4-set-wallpaper "file://%s"' % path
+
+    # OLD command = 'gsettings set org.gnome.desktop.background picture-uri "file://%s"' % path
     p = os.popen(command)
 
+    # print("current scaling method = %s" % scaling) # TODO - this isn't working
     if scaling != "'scaled'":
-        print("setting scale method")
-        command = 'gsettings set org.gnome.desktop.background picture-options none ; ' + \
-         'gsettings set org.gnome.desktop.background picture-options scaled'
+        command = '/usr/bin/gsettings set org.cinnamon.desktop.background picture-options none ; ' + \
+         '/usr/bin/gsettings set org.cinnamon.desktop.background picture-options scaled'
         p = os.popen(command)
-#   command = 'gsettings set org.gnome.desktop.background picture-options scaled'
-#   p = os.popen(command)
+
+############################################# TODO
+def hide_background_image_windows():
+    return
+
+#############################################
+def hide_background_image_linux():
+    command = '/usr/bin/gsettings set org.cinnamon.desktop.background picture-options none ; '
+    p = os.popen(command)
 
 
 #############################################
@@ -695,35 +731,53 @@ def get_random_least_recently_viewed_image(images, min_num_views):
 
 
 #############################################
-def next_random_image(images):
-    rand_image_num = 0
-    min_num_views = get_min_num_views(images)
-    rand_md5 = get_random_least_recently_viewed_image(images, min_num_views)
-    rand_image_num = image_num_by_md5(images, rand_md5)
-    images[rand_image_num]['views'] = images[rand_image_num]['views'] + 1
-    seconds_since_last_seen = int(time.time()) - images[rand_image_num]['last_seen']
-    msg = "\n#%s, '%s'" % (rand_image_num, images[rand_image_num]['path'])
-#   print("now at num_views =  %d" % images[rand_image_num]['views'])
-
-    # TODO - move to a function
+def image_info_and_set_last_seen(images, image_num):
+    msg = "\n#%s, '%s'" % (image_num, images[image_num]['path'])
     now = datetime.now()
     seconds_since_midnight = \
       (now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()
     num_since_midnight = num_seen_since(images, seconds_since_midnight)
-
-    if images[rand_image_num]['last_seen'] > 0:
+    seconds_since_last_seen = int(time.time()) - images[image_num]['last_seen']
+    if images[image_num]['last_seen'] > 0:
         print((Fore.MAGENTA + "%s, last seen %s (%d seconds) ago (#%d)" + \
           Style.RESET_ALL) % \
           (msg, seconds_to_realistic_time(seconds_since_last_seen), \
            seconds_since_last_seen, num_since_midnight))
     else:
         info("%s, first time viewing image (#%d)" % (msg, num_since_midnight))
-    sizes = image_sizes(images, rand_image_num)
-    info("%s x %s, %s kB" % (sizes['width'], sizes['height'], sizes['size']))
+    sizes = image_sizes(images, image_num)
+    info(Fore.GREEN + "%s x %s, %s kB" % (sizes['width'], sizes['height'], sizes['size']))
+    info(Style.RESET_ALL)
 
     # TODO - if we're viewing multiple images at once (2+ display, spanned),
     #        update all of the images' last_seen value
-    images[rand_image_num]['last_seen'] = int(time.time())
+    images[image_num]['last_seen'] = int(time.time())
+
+
+#############################################
+def previous_image(images):
+    min = {'value': -100, 'n': -1}
+
+    last_seen = [{'last_seen': image['last_seen'], 'index': index} for index, image in enumerate(images)]
+    sorted_last_seen = sorted(last_seen, key=lambda image: image['last_seen'])
+
+    print("last seen #%s" % sorted_last_seen[-1]['index'])
+    print("second last seen #%s" % sorted_last_seen[-2]['index'])
+
+    index = sorted_last_seen[-2]['index']
+    image_info_and_set_last_seen(images, index)
+    return images[index]
+
+
+#############################################
+def next_random_image(images):
+    rand_image_num = 0
+    min_num_views = get_min_num_views(images)
+    rand_md5 = get_random_least_recently_viewed_image(images, min_num_views)
+    rand_image_num = image_num_by_md5(images, rand_md5)
+
+    image_info_and_set_last_seen(images, rand_image_num)
+
     return images[rand_image_num]
 
 #############################################
@@ -750,6 +804,16 @@ def get_idle_time():
 
     # assume linux
     return idle.getIdleSec() * 1000
+
+def get_idle_time2():
+    # Get the timestamp of the user's last activity
+    stat = os.stat('/dev/input/mice')
+    last_activity_time = stat.st_atime
+
+    # Calculate the idle time in seconds
+    idle_time = time.time() - last_activity_time
+
+    return idle_time
 
 
 #############################################
@@ -805,11 +869,14 @@ def do_wait():
 
 usage = 'python ' + sys.argv[0] + ' -c <count: num images before exit> ' + \
         '-p <1>(poll: enter goes to next image immediately ' + \
-        '-I <1>(check for new/deleted images and write image file only) )'
+        '-I <1>(check for new/deleted images and write image file only) )' + \
+        '-q (hide background image)' 
+
+signal(SIGINT, handler)
 
 image_count_to = -1
 try:
-    opts, args = getopt.getopt(sys.argv[1:], "c:o:p:I", ["c", "p", "I"])
+    opts, args = getopt.getopt(sys.argv[1:], "c:o:p:I:q", ["c", "p", "I"])
 except getopt.GetoptError:
     info(usage)
     sys.exit(2)
@@ -822,6 +889,10 @@ for opt, arg in opts:
         image_count_to = int(arg)
     elif opt == '-p':
         polling = 1
+        sleep_seconds = 40
+    elif opt == '-q':
+        hide_background_image()
+        sys.exit()
     elif opt == '-I':
         write_info_only = 1
 
@@ -855,10 +926,12 @@ print("######################\n## %d files, %s %s, %s per day" \
 num_seen(images)
 
 counter = 0
+show_previous_image_next = 0
 
 # main loop
 while 1:
 
+    min_num_views = get_min_num_views(had_images)
     if span_multiple_images > 1:
         image_paths = []
         for i in range(0, span_multiple_images):
@@ -882,8 +955,13 @@ while 1:
         set_background_image(temp_image_file) # TODO
 
     else:
-        image = next_random_image(images)
+        if show_previous_image_next:
+            image = previous_image(images)
+            show_previous_image_next = 0
+        else:
+            image = next_random_image(images)
 
+        image['views'] = image['views'] + 1
         exifd = print_exif(image['path'])
 
         set_background_image(image)
@@ -901,7 +979,18 @@ while 1:
         break
 
     if polling:
-        input("\n" + Back.BLUE + Fore.WHITE + "polling - enter for next image: " + Style.RESET_ALL)
+        command = input("\n" + Back.BLUE + Fore.WHITE + "polling - enter for next image (b - back (previous) image, p - disable polling, q - quit, Q - hide image and quit)" +
+                        Style.RESET_ALL + ":  ")
+        command = command.strip()
+        if command == 'b':
+            show_previous_image_next = 1
+        if command == 'Q':
+            hide_background_image()
+            sys.exit()
+        if command == 'q':
+            sys.exit()
+        if command == 'p':
+            polling = 0
     else:
         print(f"{Fore.BLUE}Waiting %d seconds{Style.RESET_ALL}" % sleep_seconds)
         do_wait()
