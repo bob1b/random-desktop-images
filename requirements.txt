@@ -1,0 +1,5 @@
+numpy
+Pillow
+colorama
+importlib
+opencv-python
