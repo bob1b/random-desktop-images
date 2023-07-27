@@ -304,11 +304,11 @@ def create_last_viewed_images_file(opt, images):
                     <style>
                       body {{ font-family:sans; }}
                       ul {{ list-style-type:none; }}
-                      ul.blocks > li { float: left;
+                      ul.blocks > li {{ float: left;
                            margin: 10px;
                            border: 1px solid #ccc;
                            font-size: 0.7em;
-                           text-align: center; }
+                           text-align: center; }}
                     </style>
                   </head>
                   <body>
@@ -709,7 +709,6 @@ def do_wait(opt):
 
 def main(opts_in):
     opts = setup(opts_in)
-    print(opts)
     usage = 'python ' + sys.argv[0] + ' -c <count: num images before exit> ' + \
             '-p <1>(poll: enter goes to next image immediately ' + \
             '-I <1>(check for new/deleted images and write image file only) )' + \
@@ -761,8 +760,8 @@ def main(opts_in):
     seed_random()
 
     per_day = (24 * 60 * 60) / opts['sleep_seconds']
-    how_much, time_units = seconds_to_realistic_time(opts['num_images'] * opts['sleep_seconds'])
-    print(f"{'#'*30}\n## {len(images)} files, {how_much} {time_units}, {str(int(per_day))} per day")
+    opts['how_much'], opts['time_units'] = seconds_to_realistic_time(opts['num_images'] * opts['sleep_seconds'])
+    print(f"{'#'*30}\n## {len(images)} files, {opts['how_much']} {opts['time_units']}, {str(int(per_day))} per day")
 
     num_seen(images)
 
