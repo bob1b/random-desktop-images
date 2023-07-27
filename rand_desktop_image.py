@@ -12,28 +12,40 @@ import hashlib
 import importlib
 
 from shutil import copyfile
+from PIL.ExifTags import TAGS
 from datetime import datetime
 from PIL import Image as ImagePIL
 from signal import signal, SIGINT
 from pynput.keyboard import Listener
 from colorama import Fore, Back, Style
-from PIL.ExifTags import TAGS, GPSTAGS
+
+from ascii import do_ascii_conversion
 
 
 # ensure python 3
 if sys.version_info.major < 3:
     sys.exit("This is not Python 3")
 
-thumbnail_size = 512, 512
-sleep_seconds = 20
-after_idle_wait_seconds = 2
-percentage = 50 # randomly choose from this percentage of the least recently viewed images
-wait_for_not_idle = True
-span_multiple_images = 1
-polling = 0
-write_info_only = 0
-do_ascii_image = 0
-num_key_releases = 0
+
+opts = {
+    'image_directory': "/home/b/Pictures", # TODO - set this
+    'thumbnail_size': (512, 512),
+    'sleep_seconds': 20,
+    'after_idle_wait_seconds': 2,
+    'percentage': 50, # randomly choose from this percentage of the least recently viewed images
+    'wait_for_not_idle': True,
+    'span_multiple_images': 1,
+    'polling': 0,
+    'write_info_only': 0,
+    'do_ascii_image': 0,
+    'os_type': 'linux' # TODO - detect
+}
+
+# non-config, do not set these
+check_images = True
+key_releases = 0 # count how many keys were pressed and then released
+check_images_after_first_pic_change = True
+
 
 # TODO - clean up code
 # TODO - config file (yaml?)
@@ -51,74 +63,64 @@ num_key_releases = 0
 # TODO - instead of delete, move to 'to_delete' directory
 # TODO - write exif info?
 
-################################################ ascii
-
-
 def is_windows():
     return sys.platform.startswith('win32')
 
 def is_linux():
     return sys.platform.startswith('linux')
 
-key_releases = 0
 def on_press(key):
     pass
 
 def on_release(key):
     global key_releases
     key_releases = key_releases + 1
-#   print("key releases = %d" % key_releases)
 
+def setup(opts_in):
+    # ensure image directory is set correctly
+    image_dir = opts_in.get("image_directory", '').strip()
+    if not image_dir:
+        raise RuntimeError(f'You need to set "image_directory" near the top of the script before running')
+    if not os.path.exists(image_dir):
+        raise RuntimeError(f'Image directory "{image_dir}" does not exist')
+    if not os.path.isdir(image_dir):
+        raise RuntimeError(f'"{image_dir}" is not a directory')
 
-################################################ /ascii
+    # windows only (install from https://github.com/mhammond/pywin32/releases)
+    if is_windows():
+        import win32api, win32con, win32gui
 
+    if not is_windows() and not is_linux():
+        sys.exit("Unsupported platform: '" + sys.platform + "'. Exiting")
 
-# windows only (install from https://github.com/mhammond/pywin32/releases)
-if is_windows():
-    import win32api, win32con, win32gui
+    if hasattr(importlib, 'reload'):
+        from importlib import reload
+        reload(sys)
 
-if not is_windows() and not is_linux():
-    sys.exit("Unsupported platform: '" + sys.platform + "'. Exiting")
+    if hasattr(sys, 'setdefaultencoding'):
+        sys.setdefaultencoding('utf8')
 
+    base = os.getcwd()
 
-if hasattr(importlib, 'reload'):
-    from importlib import reload
+    new_opt = {
+        'base': base,
+        'image_directory': image_dir,
+        'image_info_file': os.path.join(base, "rand_bg_data.json"),
+        'thumbnail_directory': os.path.join(base, "rand_bg_thumbs"),
+        'temp_image_file': os.path.join(base, "rand_bg_temp_image.png"),
+        'last_viewed_images_file': os.path.join(base, "rand_bg_last_viewed.html"),
 
-# encoding=utf8
-reload(sys)
-if hasattr(sys, 'setdefaultencoding'):
-    # print("setting encoding to utf8")
-    sys.setdefaultencoding('utf8')
+    }
 
+    # listen for key presses
+    listener = Listener(on_press=on_press, on_release=on_release)
+    listener.start()
 
-check_images = True
-check_images_after_first_pic_change = True
-
-if 1:
-    # windows
-    #base = "C:/Users/b/Desktop/rand_bg_image/"
-    #image_directory = "C:/Users/b/Desktop/other/pictures"
-    #image_info_file =         base + "rand_bg_data.json"
-    #last_viewed_images_file = base + "rand_bg_last_viewed.html"
-    #temp_image_file =         base + "rand_bg_temp_image.png"
-    #thumbnail_directory =     base + "thumbnails/"
-
-    # linux
-    image_directory = "/home/b/Pictures"
-    image_info_file = "/home/b/.rand_bg_data.json"
-    last_viewed_images_file = "/home/b/.rand_bg_last_viewed.html"
-    temp_image_file = "/home/b/.rand_bg_temp_image.png"
-    temp_image_file = "/home/b/.rand_bg_temp_image.png"
-    thumbnail_directory = "/home/b/.rand_bg_thumbs"
-
-
-num_key_releases = 0
-listener = Listener(on_press=on_press, on_release=on_release)
-listener.start()
+    return opts_in.update(new_opt)
 
 #############################################
 def handler(signal_received, frame):
-    write_info_file(image_info_file, images)
+    write_info_file(opts['image_info_file'], images)
     print('SIGINT or CTRL-C detected')
     exit(0)
 
@@ -149,42 +151,37 @@ def num_seen(images):
     info("%d images seen in last year" % num_seen_since(images, seconds_per_year))
 
 
-#############################################
 def info(msg):
     print(f"{Fore.BLUE}%s{Style.RESET_ALL}" % msg)
 
-#############################################
+
 def warning(msg):
     print(f"{Back.RED}{Fore.WHITE}%s{Style.RESET_ALL}" % msg)
 
 #############################################
 def create_thumbnail(image):
-    if not os.path.isdir(thumbnail_directory) or not os.path.exists(thumbnail_directory):
-        warning("create_thumbnail(): thumbnail directory '%s' does not exist. Creating\n" \
-          % thumbnail_directory)
-        os.makedirs(thumbnail_directory)
+    thumb_dir = opt['thumbnail_directory']
+    if not os.path.isdir(thumb_dir) or not os.path.exists(thumb_dir):
+        warning(f"create_thumbnail(): thumbnail directory '{thumb_dir}' does not exist. Creating\n")
+        os.makedirs(thumb_dir)
     image_path = image['path']
     thumbnail_image_path = thumbnail_path_from_image(image)
 
     try:
-        im = ImagePIL.open(image_path)
-        im.thumbnail(thumbnail_size)
-        im.save(thumbnail_image_path, "JPEG")
+        pil_image = ImagePIL.open(image_path)
+        pil_image.thumbnail(opt['thumbnail_size'])
+        pil_image.save(thumbnail_image_path, "JPEG")
     except IOError:
         warning("cannot create thumbnail for '%s'" % image_path)
-#   except:
-#       warning("! cannot create thumbnail for '%'" % image_path)
 
 
-#############################################
 def get_file_list(directory):
     image_list = []
 
     try:
         dir_list = os.listdir(directory)
     except OSError:
-        warning("get_file_list(): unable to get directory listing! image_directory = %s" \
-          % image_directory)
+        warning(f"get_file_list(): unable to get directory listing! image_directory = {opt['image_directory']}")
         exit(1)
 
     for f in dir_list:
@@ -197,14 +194,12 @@ def get_file_list(directory):
     return image_list
 
 
-#############################################
 # wonder if there's a way to get the checksum for the image content only
 def add_image_md5s(images):
     for image in images:
         image['md5'] = hashlib.md5(image["path"].encode('utf-8')).hexdigest()
 
 
-#############################################
 def add_last_seen(images):
     for image in images:
         if 'last_seen' not in image:
@@ -212,7 +207,6 @@ def add_last_seen(images):
     return images
 
 
-#############################################
 def check_for_duplicate_images(images):
     # TODO - this is likely to be very inefficient, but is only run at startup
     md5s = sorted([i['md5'] for i in images])
@@ -225,11 +219,6 @@ def check_for_duplicate_images(images):
         prev_md5 = md5
 
 
-#############################################
-# TODO - check for lookalike images
-
-
-#############################################
 def get_min_num_views(images):
     views = []
     if not images or len(images) == 0:
@@ -248,17 +237,15 @@ def get_min_num_views(images):
         for i in images:
             if i['views'] == 0:
                 num_unseen = num_unseen + 1
-        info("      there are %d images that have not been seen yet" % num_unseen)
+        info(f"      there are {num_unseen} images that have not been seen yet")
 
     return val
 
 
-#############################################
 def seed_random():
     random.seed(int(time.time() * random.randint(0, 100) * 10))
 
 
-#############################################
 def random_image_with_view_count(images, view_count):
     print("random_image_with_view_count(): view_count = %d" % view_count)
     md5_subset = [i['md5'] for i in images if i['views'] <= view_count]
@@ -270,11 +257,11 @@ def random_image_with_view_count(images, view_count):
     return image_num_by_md5(images, md5_subset[subset_image_num])
 
 
-#############################################
 # TODO - test this function
 def first_image_with_view_count(images, views):
-    ''' This is a fallback function to find an image with a given view count
-        after there were too many random searches '''
+    """
+       This is a fallback function to find an image with a given view count after there were too many random searches
+   """
     try:
         image_views = [i['views'] for i in images]
         return image_views.index(min_num_views) # try to find first with correct view count
@@ -282,7 +269,6 @@ def first_image_with_view_count(images, views):
         return -1
 
 
-#############################################
 def load_info_file(image_info_file):
     obj = None
     if os.path.isfile(image_info_file):
@@ -302,7 +288,7 @@ def load_info_file(image_info_file):
 
 #############################################
 def thumbnail_path_from_image(image):
-    return thumbnail_directory + "/" + image['md5']+".jpg"
+    return os.path.join(opt['thumbnail_directory'], "/", f"{image['md5']}.jpg")
 
 
 #############################################
@@ -311,39 +297,36 @@ def create_last_viewed_images_file():
     last_viewed_images.sort(key=lambda x: x['last_seen'], reverse=True)
 
     try:
-        with open(last_viewed_images_file, 'w') as last_viewed_file:
-            last_viewed_file.write("""
+        with open(opt['last_viewed_images_file'], 'w') as last_viewed_file:
+            last_viewed_file.write(f"""
                 <html>
                   <head>
                     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
                     <style>
-                      body { font-family:sans; }
-                      ul { list-style-type:none; }
+                      body {{ font-family:sans; }}
+                      ul {{ list-style-type:none; }}
                       ul.blocks > li { float: left;
                            margin: 10px;
                            border: 1px solid #ccc;
                            font-size: 0.7em;
                            text-align: center; }
-                      ul.file-info li {}
                     </style>
                   </head>
                   <body>
                         <table>
-                          <tr><td>number of images</td><td>%d</td></tr>
-                          <tr><td>image directory</td><td>%s</td></tr>
-                          <tr><td>image info file</td><td>%s</td></tr>
-                          <tr><td>last viewed images file</td><td>%s</td></tr>
-                          <tr><td>thumbnail directory</td><td>%s</td></tr>
-                          <tr><td>thumbnail size</td><td>%d x %d</td></tr>
-                          <tr><td>sleep seconds</td><td>%d</td></tr>
-                          <tr><td>after idle wait seconds</td><td>%d</td></tr>
-                          <tr><td>Time to view all images</td><td>%s %s</td></tr>
+                          <tr><td>number of images</td><td>{num_images}</td></tr>
+                          <tr><td>image directory</td><td>{opt['image_directory']}</td></tr>
+                          <tr><td>image info file</td><td>{opt['image_info_file']}</td></tr>
+                          <tr><td>last viewed images file</td><td>{opt['last_viewed_images_file']}</td></tr>
+                          <tr><td>thumbnail directory</td><td>{opt['thumbnail_directory']}</td></tr>
+                          <tr><td>thumbnail size</td><td>{opt['thumbnail_size'][0]}x{opt['thumbnail_size'][1]}</td></tr>
+                          <tr><td>sleep seconds</td><td>{opt['sleep_seconds']}</td></tr>
+                          <tr><td>after idle wait seconds</td><td>{opt['after_idle_wait_seconds']}</td></tr>
+                          <tr><td>Time to view all images</td><td>{opt['how_much']} {opt['time_units']}</td></tr>
                         </table>
                         <p><b>Most recently viewed image first</b></p>
                         <ul class="blocks">
-            """ % (num_images, image_directory, image_info_file, last_viewed_images_file,
-                   thumbnail_directory, thumbnail_size[0], thumbnail_size[1], sleep_seconds,
-                   after_idle_wait_seconds, how_much, time_units))
+            """)
 
 #           for i in l:
 #               if int(i['last_seen']) > 0:
@@ -371,10 +354,9 @@ def create_last_viewed_images_file():
                   </body></html>""")
 
     except IOError:
-        warning("Unable to write last_viewed_images_file: %s" % last_viewed_images_file)
+        warning(f"Unable to write last_viewed_images_file: {opt['last_viewed_images_file']}")
 
 
-#############################################
 def write_info_file(image_info_file, images):
     try:
         with open(image_info_file, 'w') as json_file:
@@ -383,14 +365,13 @@ def write_info_file(image_info_file, images):
         warning("Unable to write info file: %s" % image_info_file)
 
 
-#############################################
 def image_info_by_md5(images, md5, allow_multiple=False):
     found_images = []
     for image in images:
         if image['md5'] == md5:
             if allow_multiple:
                 found_images.append(image)
-                next
+                continue
             else:
                 return image
 
@@ -405,7 +386,6 @@ def image_info_by_md5(images, md5, allow_multiple=False):
     return None
 
 
-#############################################
 def image_num_by_md5(images, md5):
     for idx, image in enumerate(images):
         if image['md5'] == md5:
@@ -413,22 +393,19 @@ def image_num_by_md5(images, md5):
     return None
 
 
-#############################################
 def completion_printout(idx, final_count, prev_tick):
     perc = float(idx)/final_count*100
-#   print("{} {} {}".format(idx, final_count, prev_tick))
     if int(time.time()) >= prev_tick + 2:
         prev_tick = int(time.time())
         info("      {} % ({} of {})".format(int(perc), idx, final_count))
     return prev_tick
 
 
-#############################################
 # TODO - perhaps rename
 # TODO - probably break into sub functions
 def compare_current_images_to_had_images(images, had_images):
     if not check_images:
-        if not os.path.exists(image_info_file):
+        if not os.path.exists(opt['image_info_file']):
             warning("Info file doesn't exist, cannot skip compare_current_images_to_had_images()")
         else:
             return had_images
@@ -482,58 +459,57 @@ def compare_current_images_to_had_images(images, had_images):
     return images
 
 
-#############################################
 def seconds_to_realistic_time(seconds):
     if seconds <= 60:
-        return (seconds, "seconds")
+        return seconds, "seconds"
 
     minutes = seconds / 60.0
     if minutes < 60:
-        return ("%.2f" % minutes, 'minutes')
+        return "%.2f" % minutes, 'minutes'
 
     hours = minutes / 60.0
     if hours < 24:
-        return ("%.2f" % hours, 'hours')
+        return "%.2f" % hours, 'hours'
 
     days = hours / 24.0
     if days < 7:
-        return ("%.2f" % days, 'days')
+        return "%.2f" % days, 'days'
 
     weeks = days / 7.0
-    return ("%.2f" % weeks, 'weeks')
+    return "%.2f" % weeks, 'weeks'
+
 
 def print_exif(fn):
     ret = {}
     try:
-        i = ImagePIL.open(fn)
-        info = i._getexif()
-        if not info:
+        pil_image = ImagePIL.open(fn)
+        image_exif = pil_image._getexif()
+        if not image_exif:
             return {}
-    except:
+    except Exception as e:
         print(Back.RED + Fore.WHITE + "Unable to open file for reading exif" + Style.RESET_ALL)
         return {}
 
-    for tag, value in info.items():
+    for tag, value in image_exif.items():
         decoded = TAGS.get(tag, tag)
         ret[decoded] = value
         print((Fore.YELLOW + "\t%s %s" + Style.RESET_ALL) % (str(decoded).ljust(20, ' '), value))
 
 
-#############################################
 def set_background_image(image):
     if is_windows():
         set_background_image_windows(image)
     else: # assume linux
         set_background_image_linux(image)
 
-#############################################
+
 def hide_background_image():
     if is_windows():
         hide_background_image_windows()
     else: # assume linux
         hide_background_image_linux()
 
-#############################################
+
 def set_background_image_windows(image):
     path = image
     if isinstance(image, dict):
@@ -546,7 +522,6 @@ def set_background_image_windows(image):
     win32gui.SystemParametersInfo(win32con.SPI_SETDESKWALLPAPER, path, 1+2)
 
 
-#############################################
 def set_background_image_linux(image):
     path = image
     if isinstance(image, dict):
@@ -579,17 +554,17 @@ def set_background_image_linux(image):
          '/usr/bin/gsettings set org.cinnamon.desktop.background picture-options scaled'
         p = os.popen(command)
 
-############################################# TODO
+
 def hide_background_image_windows():
+    """ TODO """
     return
 
-#############################################
+
 def hide_background_image_linux():
     command = '/usr/bin/gsettings set org.cinnamon.desktop.background picture-options none ; '
     p = os.popen(command)
 
 
-#############################################
 def get_random_least_recently_viewed_image(images, min_num_views):
     # now = int(time.time())  XXX unused?
 
@@ -600,7 +575,7 @@ def get_random_least_recently_viewed_image(images, min_num_views):
 
     least_viewed_images.sort(key=lambda x: x['last_seen'])
 
-    percent = int(math.ceil(len(least_viewed_images) * (float(percentage) / 100.0)))
+    percent = int(math.ceil(len(least_viewed_images) * (float(opt['percentage']) / 100.0)))
     if percent < 30:
         percent = min(30, len(least_viewed_images))
 
@@ -609,7 +584,7 @@ def get_random_least_recently_viewed_image(images, min_num_views):
     return least_viewed_images[image_num]['md5']
 
 
-#############################################
+
 def image_info_and_set_last_seen(images, image_num):
     msg = "\n#%s, '%s'" % (image_num, images[image_num]['path'])
     now = datetime.now()
@@ -618,10 +593,8 @@ def image_info_and_set_last_seen(images, image_num):
     num_since_midnight = num_seen_since(images, seconds_since_midnight)
     seconds_since_last_seen = int(time.time()) - images[image_num]['last_seen']
     if images[image_num]['last_seen'] > 0:
-        print((Fore.MAGENTA + "%s, last seen %s (%d seconds) ago (#%d)" + \
-          Style.RESET_ALL) % \
-          (msg, seconds_to_realistic_time(seconds_since_last_seen), \
-           seconds_since_last_seen, num_since_midnight))
+        print((Fore.MAGENTA + "%s, last seen %s (%d seconds) ago (#%d)" + Style.RESET_ALL) % \
+          (msg, seconds_to_realistic_time(seconds_since_last_seen), seconds_since_last_seen, num_since_midnight))
     else:
         info("%s, first time viewing image (#%d)" % (msg, num_since_midnight))
     sizes = image_sizes(images, image_num)
@@ -633,10 +606,7 @@ def image_info_and_set_last_seen(images, image_num):
     images[image_num]['last_seen'] = int(time.time())
 
 
-#############################################
 def previous_image(images):
-    min = {'value': -100, 'n': -1}
-
     last_seen = [{'last_seen': image['last_seen'], 'index': index} for index, image in enumerate(images)]
     sorted_last_seen = sorted(last_seen, key=lambda image: image['last_seen'])
 
@@ -648,9 +618,7 @@ def previous_image(images):
     return images[index]
 
 
-#############################################
 def next_random_image(images):
-    rand_image_num = 0
     min_num_views = get_min_num_views(images)
     rand_md5 = get_random_least_recently_viewed_image(images, min_num_views)
     rand_image_num = image_num_by_md5(images, rand_md5)
@@ -659,30 +627,30 @@ def next_random_image(images):
 
     return images[rand_image_num]
 
-#############################################
+
 def image_sizes(images, image_num):
     file = images[image_num]['path']
     img = cv2.imread(file, 0)
     try:
         height, width = img.shape[:2]
-    except:
+    except Exception as e:
         height = "??"
         width = "??"
     try:
         file_stats = os.stat(file)
         file_size = (float(file_stats.st_size) / 1024.0)
-    except:
+    except Exception as e:
         file_size = '??'
     return {'width':width, 'height':height, 'size':file_size}
 
 
-#############################################
 def get_idle_time():
     if is_windows():
         return win32api.GetTickCount() - win32api.GetLastInputInfo()
 
     # assume linux
     return idle.getIdleSec() * 1000
+
 
 def get_idle_time2():
     # Get the timestamp of the user's last activity
@@ -695,7 +663,6 @@ def get_idle_time2():
     return idle_time
 
 
-#############################################
 # this is the wait for idle loop
 def do_wait():
     epoch_time = int(time.time())
@@ -715,14 +682,14 @@ def do_wait():
             idle_ms = get_idle_time()
 
             if ready_to_change_pic:
-                if idle_ms > (.5 * sleep_seconds * 1000) and wait_for_not_idle:
+                if idle_ms > (.5 * sleep_seconds * 1000) and opts['wait_for_not_idle']:
                     if not notified:
                         print(f"{Fore.BLUE}ready to change pic, waiting for end of idle{Style.RESET_ALL}")
                         notified = True
                 else:
                     if notified:
-                        print(f"{Fore.BLUE}Waiting %d seconds{Style.RESET_ALL}" % after_idle_wait_seconds)
-                    time.sleep(after_idle_wait_seconds)
+                        print(f"{Fore.BLUE}Waiting {opts['after_idle_wait_seconds']} seconds{Style.RESET_ALL}")
+                    time.sleep(opts['after_idle_wait_seconds'])
                     notified = False
                     break
 
@@ -746,6 +713,8 @@ def do_wait():
 ###############################################################
 # main
 
+opts = setup(opts)
+
 usage = 'python ' + sys.argv[0] + ' -c <count: num images before exit> ' + \
         '-p <1>(poll: enter goes to next image immediately ' + \
         '-I <1>(check for new/deleted images and write image file only) )' + \
@@ -755,12 +724,12 @@ signal(SIGINT, handler)
 
 image_count_to = -1
 try:
-    opts, args = getopt.getopt(sys.argv[1:], "c:o:p:I:q", ["c", "p", "I"])
+    command_line_opts, args = getopt.getopt(sys.argv[1:], "c:o:p:I:q", ["c", "p", "I"])
 except getopt.GetoptError:
     info(usage)
     sys.exit(2)
 
-for opt, arg in opts:
+for opt, arg in command_line_opts:
     if opt == '-h':
         info(usage)
         sys.exit()
@@ -775,12 +744,12 @@ for opt, arg in opts:
     elif opt == '-I':
         write_info_only = 1
 
-images = get_file_list(image_directory)
+images = get_file_list(opts['image_directory'])
 add_image_md5s(images)
 
 
 # load image data that was possibly saved from last run (eg. view count)
-had_images = load_info_file(image_info_file)
+had_images = load_info_file(opts['image_info_file'])
 
 min_num_views = get_min_num_views(had_images)
 
@@ -789,18 +758,17 @@ images = add_last_seen(images)
 
 check_for_duplicate_images(images)
 
-write_info_file(image_info_file, images)
-if write_info_only:
+write_info_file(opts['image_info_file'], images)
+if opts['write_info_only']:
     print("Exiting after writing image file")
     sys.exit()
 
 num_images = len(images)
 seed_random()
 
-per_day = (24 * 60 * 60) / sleep_seconds
-how_much, time_units = seconds_to_realistic_time(num_images*sleep_seconds)
-print("######################\n## %d files, %s %s, %s per day" \
-  % (len(images), how_much, time_units, str(int(per_day))))
+per_day = (24 * 60 * 60) / opts['sleep_seconds']
+how_much, time_units = seconds_to_realistic_time(num_images*opts['sleep_seconds'])
+print(f"{'#'*30}\n## {len(images)} files, {how_much} {time_units}, {str(int(per_day))} per day")
 
 num_seen(images)
 
@@ -811,7 +779,7 @@ show_previous_image_next = 0
 while 1:
 
     min_num_views = get_min_num_views(had_images)
-    if span_multiple_images > 1:
+    if opts['span_multiple_images'] > 1:
         image_paths = []
         for i in range(0, span_multiple_images):
             image = next_random_image(images)
@@ -830,8 +798,8 @@ while 1:
             new_im.paste(im, (x_offset, 0))
             x_offset += im.size[0]
 
-        new_im.save(temp_image_file)
-        set_background_image(temp_image_file) # TODO
+        new_im.save(opts['temp_image_file'])
+        set_background_image(opts['temp_image_file']) # TODO
 
     else:
         if show_previous_image_next:
@@ -843,23 +811,26 @@ while 1:
         image['views'] = image['views'] + 1
         exifd = print_exif(image['path'])
 
+
         set_background_image(image)
         create_thumbnail(image)
 
-        if do_ascii_image:
-            do_conversion(image['path'])
+        if opts['do_ascii_image']:
+            rows = do_ascii_conversion(image['path'])
+            for r in rows:
+                print(r)
 
-    write_info_file(image_info_file, images)
+    write_info_file(opts['image_info_file'], images)
     create_last_viewed_images_file()
 
     counter = counter + 1
-#   if image_count_to > 0 and counter >= image_count_to:
     if counter >= image_count_to > 0:
         break
 
-    if polling:
-        command = input("\n" + Back.BLUE + Fore.WHITE + "polling - enter for next image (b - back (previous) image, p - disable polling, q - quit, Q - hide image and quit)" +
-                        Style.RESET_ALL + ":  ")
+    if opts['polling']:
+        command = input(
+            f"\n{Back.BLUE}{Fore.WHITE} polling - enter for next image (b - back (previous) image, p - disable " +
+            f"polling, q - quit, Q - hide image and quit){Style.RESET_ALL}:  ")
         command = command.strip()
         if command == 'b':
             show_previous_image_next = 1
@@ -871,5 +842,5 @@ while 1:
         if command == 'p':
             polling = 0
     else:
-        print(f"{Fore.BLUE}Waiting %d seconds{Style.RESET_ALL}" % sleep_seconds)
+        print(f"{Fore.BLUE}Waiting {opts['sleep_seconds']} seconds{Style.RESET_ALL}")
         do_wait()
