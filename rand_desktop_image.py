@@ -10,6 +10,7 @@ import random
 import getopt
 import hashlib
 import importlib
+from idle_time import IdleMonitor
 
 from shutil import copyfile
 from PIL.ExifTags import TAGS
@@ -98,10 +99,14 @@ def setup(opts):
     if hasattr(sys, 'setdefaultencoding'):
         sys.setdefaultencoding('utf8')
 
+    # set up monitor for user idle time
+    monitor = IdleMonitor.get_monitor()
+
     base = os.getcwd()
 
     new_opts = {
         'base': base,
+        'idle_monitor': monitor,
         'image_directory': image_dir,
         'image_info_file': os.path.join(base, "rand_bg_data.json"),
         'thumbnail_directory': os.path.join(base, "rand_bg_thumbs"),
@@ -116,14 +121,13 @@ def setup(opts):
     opts.update(new_opts)
     return opts
 
-#############################################
+
 def handler(opt, images, signal_received, frame):
     write_info_file(opt['image_info_file'], images)
     print('SIGINT or CTRL-C detected')
     exit(0)
 
 
-#############################################
 def num_seen_since(images, seconds_ago):
     count = 0
     for i in images:
@@ -132,7 +136,7 @@ def num_seen_since(images, seconds_ago):
                 count = count + 1
     return count
 
-#############################################
+
 def num_seen(images):
     now = datetime.now()
     seconds_since_midnight = (now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()
@@ -157,7 +161,7 @@ def info(msg):
 def warning(msg):
     print(f"{Back.RED}{Fore.WHITE}%s{Style.RESET_ALL}" % msg)
 
-#############################################
+
 def create_thumbnail(opt, image):
     thumb_dir = opt['thumbnail_directory']
     if not os.path.isdir(thumb_dir) or not os.path.exists(thumb_dir):
@@ -285,12 +289,10 @@ def load_info_file(image_info_file):
     return obj
 
 
-#############################################
 def thumbnail_path_from_image(opt, image):
     return os.path.join(opt['thumbnail_directory'], "/", f"{image['md5']}.jpg")
 
 
-#############################################
 def create_last_viewed_images_file(opt, images):
     last_viewed_images = copy.deepcopy(images)
     last_viewed_images.sort(key=lambda x: x['last_seen'], reverse=True)
@@ -639,25 +641,6 @@ def image_sizes(images, image_num):
     return {'width':width, 'height':height, 'size':file_size}
 
 
-def get_idle_time():
-    if is_windows():
-        return win32api.GetTickCount() - win32api.GetLastInputInfo()
-
-    # assume linux
-    return idle.getIdleSec() * 1000
-
-
-def get_idle_time2():
-    # Get the timestamp of the user's last activity
-    stat = os.stat('/dev/input/mice')
-    last_activity_time = stat.st_atime
-
-    # Calculate the idle time in seconds
-    idle_time = time.time() - last_activity_time
-
-    return idle_time
-
-
 # this is the wait for idle loop
 def do_wait(opt):
     epoch_time = int(time.time())
@@ -674,8 +657,8 @@ def do_wait(opt):
             if int(time.time()) - epoch_time >= opt['sleep_seconds']:
                 ready_to_change_pic = True
 
-            idle_ms = get_idle_time()
-
+            idle_ms = get_idle_time(opt)
+            print(f"idle ms = {idle_ms}")
             if ready_to_change_pic:
                 if idle_ms > (.5 * opt['sleep_seconds'] * 1000) and opt['wait_for_not_idle']:
                     if not notified:
@@ -705,7 +688,9 @@ def do_wait(opt):
             sys.exit()
 
 
-###############################################################
+def get_idle_time(opt):
+    return opt['idle_monitor'].get_idle_time()
+
 
 def main(opts_in):
     opts = setup(opts_in)
@@ -714,7 +699,7 @@ def main(opts_in):
             '-I <1>(check for new/deleted images and write image file only) )' + \
             '-q (hide background image)'
 
-    signal(SIGINT, lambda x: handler(opts, images, None, None)) # TODO - images might not be the correct value
+    signal(SIGINT, lambda x, y: handler(opts, images, None, None)) # TODO - images might not be the correct value
 
     image_count_to = -1
     try:
